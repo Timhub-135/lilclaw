@@ -99,13 +99,17 @@ fun SetupScreen(
                 },
             ) { step ->
                 when (step) {
-                    SetupStep.WELCOME -> WelcomeStep(onNext = viewModel::onGetStarted)
+                    SetupStep.WELCOME -> WelcomeStep(
+                        onNext = viewModel::onGetStarted,
+                        onSkip = viewModel::onSkipProvider,
+                    )
                     SetupStep.PROVIDER -> ProviderStep(
                         state = state,
                         onProviderChanged = viewModel::onProviderChanged,
                         onApiKeyChanged = viewModel::onApiKeyChanged,
                         onModelChanged = viewModel::onModelChanged,
                         onContinue = viewModel::onContinue,
+                        onSkip = viewModel::onSkipProvider,
                     )
                     SetupStep.LAUNCHING -> LaunchingStep(
                         state = state,
@@ -121,7 +125,7 @@ fun SetupScreen(
 // ── Welcome ───────────────────────────────────────────────
 
 @Composable
-private fun WelcomeStep(onNext: () -> Unit) {
+private fun WelcomeStep(onNext: () -> Unit, onSkip: () -> Unit) {
     val infiniteTransition = rememberInfiniteTransition(label = "welcome")
     val breathe by infiniteTransition.animateFloat(
         initialValue = 0.9f,
@@ -183,6 +187,17 @@ private fun WelcomeStep(onNext: () -> Unit) {
         ) {
             Text("开始使用", style = MaterialTheme.typography.titleMedium)
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        // 可选：不配置 AI 服务也能启动，稍后在设置页配置
+        OutlinedButton(
+            onClick = onSkip,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Text("稍后配置 AI 服务（可在设置中修改）", style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 
@@ -196,6 +211,7 @@ private fun ProviderStep(
     onApiKeyChanged: (String) -> Unit,
     onModelChanged: (String) -> Unit,
     onContinue: () -> Unit,
+    onSkip: () -> Unit,
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
@@ -292,9 +308,7 @@ private fun ProviderStep(
                     setOnEditorActionListener { _, actionId, _ ->
                         if (actionId == EditorInfo.IME_ACTION_DONE) {
                             clearFocus()
-                            if (state.provider.isNotEmpty() && state.apiKey.isNotEmpty()) {
-                                onContinue()
-                            }
+                            onContinue()
                             true
                         } else false
                     }
@@ -314,13 +328,25 @@ private fun ProviderStep(
 
         Button(
             onClick = onContinue,
-            enabled = state.provider.isNotEmpty() && state.apiKey.isNotEmpty(),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
             shape = RoundedCornerShape(16.dp),
         ) {
-            Text("继续", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (state.apiKey.isNotEmpty()) "继续" else "暂不配置，直接启动",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onSkip,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Text("跳过（稍后在设置中配置）", style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

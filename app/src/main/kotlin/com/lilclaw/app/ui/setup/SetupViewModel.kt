@@ -113,7 +113,20 @@ class SetupViewModel(
     }
 
     fun onGetStarted() {
-        _state.update { it.copy(step = SetupStep.PROVIDER) }
+        _state.update {
+            it.copy(
+                step = SetupStep.PROVIDER,
+                provider = it.provider,
+                apiKey = it.apiKey,
+            )
+        }
+    }
+
+    /**
+     * 跳过 AI 服务配置，直接启动（可在设置页后配）。
+     */
+    fun onSkipProvider() {
+        goToLaunching(skip = true)
     }
 
     fun onProviderChanged(provider: String) {
@@ -129,8 +142,8 @@ class SetupViewModel(
     }
 
     /**
-     * User pressed Continue on the provider screen.
-     * Transition to Launching → bootstrap everything.
+     * User pressed Continue on the provider screen (may be empty provider).
+     * Transition to Launching → bootstrap everything. 空配置也允许启动。
      */
     fun onContinue() {
         val s = _state.value
@@ -154,6 +167,35 @@ class SetupViewModel(
             model = s.model,
         ) {
             _state.update { it.copy(step = SetupStep.DONE) }
+        }
+    }
+
+    /** 跳过配置进入启动（provider/apiKey 用已存值或空）。 */
+    private fun goToLaunching(skip: Boolean) {
+        val existingProvider = _state.value.provider
+        val existingApiKey = _state.value.apiKey
+        val existingModel = _state.value.model
+        _state.update {
+            it.copy(
+                step = SetupStep.LAUNCHING,
+                progress = 0f,
+                logLines = emptyList(),
+                error = null,
+                statusText = "正在准备...",
+            )
+        }
+        viewModelScope.launch {
+            val provider = existingProvider.ifEmpty { settings.providerValue() }
+            val apiKey = existingApiKey.ifEmpty { settings.apiKeyValue() }
+            val model = existingModel.ifEmpty { settings.modelValue() }
+            if (skip) settings.completeSetup(provider, apiKey, model)
+            gatewayManager.bootstrap(
+                provider = provider,
+                apiKey = apiKey,
+                model = model,
+            ) {
+                _state.update { it.copy(step = SetupStep.DONE) }
+            }
         }
     }
 
