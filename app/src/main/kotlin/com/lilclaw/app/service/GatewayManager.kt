@@ -3,8 +3,11 @@ package com.lilclaw.app.service
 import android.content.Context
 import android.util.Log
 import com.lilclaw.app.service.gateway.ConfigWriter
+import com.lilclaw.app.service.gateway.EngineDetector
+import com.lilclaw.app.service.gateway.EngineProxy
 import com.lilclaw.app.service.gateway.ProcessRunner
 import com.lilclaw.app.service.gateway.RootfsManager
+import com.lilclaw.app.service.gateway.SandboxProxy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +34,12 @@ sealed class GatewayState {
 
 /**
  * Orchestrates the gateway lifecycle: rootfs setup, config, process start/stop.
- * Delegates heavy lifting to [RootfsManager], [ProcessRunner], [ConfigWriter].
+ * Delegates heavy lifting to [RootfsManager], ProcessRunner/SandboxProxy, [ConfigWriter].
+ *
+ * 引擎选择：启动时用 [EngineDetector] 探测 ptrace 是否可用——
+ *   - 原生 AOSP（ptrace 可用）→ [ProcessRunner]（proot，硬隔离）
+ *   - 卓易通等受限容器 → [SandboxProxy]（零 ptrace 沙盒代理层）
+ * 若首选引擎启动失败，自动降级到另一引擎（"处理入口托管"而非硬报错）。
  */
 class GatewayManager(private val context: Context) {
 
@@ -42,7 +50,13 @@ class GatewayManager(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val rootfs = RootfsManager(context)
-    private val processes = ProcessRunner(context)
+
+    /** 两个引擎都保留引用，便于探测 + 失败降级。 */
+    private val prootEngine = ProcessRunner(context)
+    private val sandboxEngine = SandboxProxy(context)
+
+    /** 当前激活的引擎。 */
+    private var activeEngine: EngineProxy = prootEngine
 
     private val _state = MutableStateFlow<GatewayState>(GatewayState.Idle)
     val state: StateFlow<GatewayState> = _state
@@ -167,10 +181,10 @@ class GatewayManager(private val context: Context) {
     }
 
     fun stop() {
-        processes.stopAll()
+        activeEngine.stopAll()
         scope.launch {
             delay(5000)
-            processes.forceStopAll()
+            activeEngine.forceStopAll()
         }
         _state.value = GatewayState.Idle
         GatewayService.stop(context)
@@ -186,13 +200,37 @@ class GatewayManager(private val context: Context) {
 
     // ── Private helpers ───────────────────────────────────
 
+    /**
+     * 按探测结果选择引擎并启动 gateway + serve-ui。
+     * 若首选引擎（proot）启动即崩，自动降级到沙盒引擎（卓易通等受限容器）。
+     */
     private suspend fun startProcesses(port: Int) {
-        log("启动 AI 引擎...")
-        val gwProcess = processes.startGateway(port)
-        pumpProcessLog(gwProcess, "gw")
+        // 选择初始引擎
+        val preferred = if (EngineDetector.detect(context) == EngineDetector.Engine.PROOT)
+            prootEngine else sandboxEngine
+        activeEngine = preferred
+
+        log("启动 AI 引擎（${engineName(activeEngine)}）...")
+        var gwProcess = try {
+            activeEngine.startGateway(port)
+        } catch (e: Exception) {
+            Log.w(TAG, "engine start failed, failing over: ${e.message}")
+            null
+        }
+
+        // proot 启动后立刻退出（子进程起不来）→ 降级到 sandbox
+        if (gwProcess == null || !gwProcess.isAlive || gwProcess.exitValueSaved()) {
+            if (activeEngine === prootEngine) {
+                log("proot 引擎不可用，降级到沙盒引擎（卓易通/受限容器模式）...")
+                activeEngine = sandboxEngine
+                gwProcess = activeEngine.startGateway(port)
+            }
+        }
+        val gw = gwProcess ?: throw IllegalStateException("引擎启动失败：${engineName(activeEngine)}")
+        pumpProcessLog(gw, "gw")
 
         log("启动聊天界面...")
-        val uiProcess = processes.startServeUi()
+        val uiProcess = activeEngine.startServeUi()
         if (uiProcess != null) {
             pumpProcessLog(uiProcess, "ui")
             log("聊天界面已启动")
@@ -200,6 +238,13 @@ class GatewayManager(private val context: Context) {
             log("serve-ui.cjs 未找到，跳过聊天界面")
         }
     }
+
+    /** 进程是否已退出（非 null 且已结束）。 */
+    private fun Process.exitValueSaved(): Boolean =
+        runCatching { !isAlive }.getOrDefault(true)
+
+    private fun engineName(e: EngineProxy): String =
+        if (e === prootEngine) "proot" else "sandbox"
 
     private fun pumpProcessLog(process: Process, prefix: String) {
         scope.launch {
@@ -277,7 +322,7 @@ class GatewayManager(private val context: Context) {
             val maxRestarts = 3
             while (restartCount < maxRestarts) {
                 delay(5000) // Check every 5 seconds
-                val process = processes.gatewayProcess
+                val process = activeEngine.gatewayProcess
                 if (process == null || !process.isAlive) {
                     if (_state.value == GatewayState.Idle) break // Intentional stop
                     restartCount++
@@ -285,7 +330,7 @@ class GatewayManager(private val context: Context) {
                     _state.value = GatewayState.Starting
                     GatewayService.updateStatus(context, "Restarting... ($restartCount/$maxRestarts)")
                     try {
-                        val gwProcess = processes.startGateway(port)
+                        val gwProcess = activeEngine.startGateway(port)
                         pumpProcessLog(gwProcess, "gw")
                         waitForPort(port, timeoutMs = 30_000)
                         _state.value = GatewayState.Running
