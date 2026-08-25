@@ -9,8 +9,9 @@ import java.io.File
 /**
  * Builds and runs processes inside proot.
  * Manages gateway + serve-ui process lifecycle.
+ * Implements [EngineProxy] (PROOT engine).
  */
-class ProcessRunner(private val context: Context) {
+class ProcessRunner(private val context: Context) : EngineProxy {
 
     companion object {
         private const val TAG = "ProcessRunner"
