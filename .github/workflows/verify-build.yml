@@ -29,13 +29,13 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       # 编译验证需要 rootfs 层解到 assets（否则 assembleDebug 可能因缺 asset 失败）。
-      # 这里拉 layers-v3 到 assets（.bin 后缀防 AAPT 解压）。
+      # layers-v3 属于上游 4ier/lilclaw（fork 没有该 release），显式 --repo 指向上游。
       - name: Download rootfs layers (for compile)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/src/main/assets/rootfs
-          gh release download layers-v3 --pattern "*.tar.gz" --dir /tmp/layers
+          gh release download layers-v3 --repo 4ier/lilclaw --pattern "*.tar.gz" --dir /tmp/layers
           for f in /tmp/layers/*.tar.gz; do
             cp "$f" "app/src/main/assets/rootfs/$(basename "$f").bin"
           done

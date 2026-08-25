@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/src/main/assets/rootfs
-          gh release download layers-v3 --pattern "*.tar.gz" --dir /tmp/layers
+          gh release download layers-v3 --repo 4ier/lilclaw --pattern "*.tar.gz" --dir /tmp/layers
           # Rename to .bin to prevent AAPT decompression
           for f in /tmp/layers/*.tar.gz; do
             cp "$f" "app/src/main/assets/rootfs/$(basename "$f").bin"
