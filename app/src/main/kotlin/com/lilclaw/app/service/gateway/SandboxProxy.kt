@@ -28,10 +28,18 @@ class SandboxProxy(private val context: Context) : EngineProxy {
 
     companion object {
         private const val TAG = "SandboxProxy"
+
+        // Alpine apk 国内镜像（华为云）
         private const val ALPINE_MAIN =
             "https://mirrors.huaweicloud.com/alpine/v3.21/main\n"
         private const val ALPINE_COMMUNITY =
             "https://mirrors.huaweicloud.com/alpine/v3.21/community\n"
+
+        // Python (pip) 国内镜像：清华 TUNA
+        private const val PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+        // Node (npm) 国内镜像：npmmirror
+        private const val NPM_REGISTRY_URL = "https://registry.npmmirror.com"
     }
 
     val rootfsDir: File get() = File(context.filesDir, "rootfs")
@@ -45,6 +53,36 @@ class SandboxProxy(private val context: Context) : EngineProxy {
 
     init {
         Log.i(TAG, "SandboxProxy ready (no-ptrace engine). rootfs=${rootfsDir.absolutePath}")
+        ensureMirrorConfig()
+    }
+
+    /**
+     * 在 rootfs 内写国内镜像配置文件，让沙盒里直接跑的 pip/npm 也走国内源：
+     *  - /root/.npmrc                → npm 用 npmmirror 国内源
+     *  - /root/.config/pip/pip.conf   → pip 用清华国内源
+     * 仅在文件不存在时写入（幂等）。
+     */
+    fun ensureMirrorConfig() {
+        val root = rootfsDir
+        try {
+            val npmrc = File(root, "root/.npmrc")
+            if (!npmrc.exists()) {
+                npmrc.parentFile?.mkdirs()
+                npmrc.writeText("registry=$NPM_REGISTRY_URL\n")
+            }
+            val pipConf = File(root, "root/.config/pip/pip.conf")
+            if (!pipConf.exists()) {
+                pipConf.parentFile?.mkdirs()
+                pipConf.writeText(
+                    "[global]\n" +
+                    "index-url=$PIP_INDEX_URL\n" +
+                    "trusted-host=pypi.tuna.tsinghua.edu.cn\n"
+                )
+            }
+            Log.i(TAG, "Mirror config ensured (npm=$NPM_REGISTRY_URL, pip=$PIP_INDEX_URL)")
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureMirrorConfig failed: ${e.message}")
+        }
     }
 
     // ── 进程启动：rootfs 锚定 exec arm64 二进制，不经 proot ──
@@ -145,11 +183,16 @@ class SandboxProxy(private val context: Context) : EngineProxy {
         else Log.i(TAG, "apk add $pkg ok")
     }
 
-    /** pip install —— --target 强制进 rootfs 工作区 vendor（相对 cwd，app 可写）。 */
+    /** pip install —— --target 强制进 rootfs 工作区 vendor，用清华 pip 镜像。 */
     suspend fun pipInstall(pkg: String): Process =
-        spawnSandboxed(listOf("/usr/bin/python3", "-m", "pip", "install", "--target", "vendor", pkg))
+        spawnSandboxed(
+            listOf(
+                "/usr/bin/python3", "-m", "pip", "install",
+                "--target", "vendor", "-i", PIP_INDEX_URL, pkg,
+            )
+        )
 
-    /** npm —— 依赖 spawnSandboxed 注入的 npm_config_prefix（指向 rootfs），无需显式 --prefix。 */
+    /** npm —— 依赖 spawnSandboxed 注入的 npm_config_prefix + npm_config_registry（都指向国内/rootfs）。 */
     suspend fun npm(args: List<String>): Process =
         spawnSandboxed(listOf("/usr/bin/npm", *args.toTypedArray()))
 
@@ -180,8 +223,12 @@ class SandboxProxy(private val context: Context) : EngineProxy {
         env["PYTHONPATH"] = "$root/usr/lib/python3.12/site-packages"
         env["PYTHONUSERBASE"] = "$root/root/.local"
         env["PIP_TARGET"] = "$root/root/.pip-target"
+        env["PIP_INDEX_URL"] = PIP_INDEX_URL
+        env["PIP_TRUSTED_HOST"] = "pypi.tuna.tsinghua.edu.cn"
         env["npm_config_prefix"] = "$root/root/.npm-global"
         env["NPM_CONFIG_PREFIX"] = "$root/root/.npm-global"
+        env["npm_config_registry"] = NPM_REGISTRY_URL
+        env["NPM_CONFIG_REGISTRY"] = NPM_REGISTRY_URL
         // 关键：sandbox 无 chroot 路径翻译，node 看到的是真实绝对路径。
         // NODE_OPTIONS 必须用 rootfs 内 android-compat.cjs 的真实绝对路径，而非 proot 的虚拟 /root/...
         env["NODE_OPTIONS"] = "--require $root/root/android-compat.cjs"

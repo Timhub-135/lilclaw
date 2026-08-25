@@ -1,9 +1,14 @@
 package com.lilclaw.app.ui.settings
 
+import android.text.InputType
+import android.text.method.PasswordTransformationMethod
+import android.widget.EditText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,9 +38,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.widget.doAfterTextChanged
 import com.lilclaw.app.service.GatewayState
 import org.koin.androidx.compose.koinViewModel
+
+private val PROVIDERS = listOf("DeepSeek", "OpenAI", "Anthropic", "AWS Bedrock", "自定义")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,19 +129,51 @@ fun SettingsScreen(
                 }
             }
 
-            // Provider info card
+            // Provider info card（可编辑 AI 服务配置）
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("服务商", style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("AI 服务", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.weight(1f))
+                        if (!state.editing) {
+                            OutlinedButton(onClick = { viewModel.setEditing(true) }) {
+                                Text("配置")
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "服务商: ${state.provider.ifEmpty { "未配置" }}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        "模型: ${state.model.ifEmpty { "默认" }}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+
+                    if (state.editing) {
+                        ProviderEditor(
+                            state = state,
+                            onProviderChanged = viewModel::onProviderChanged,
+                            onApiKeyChanged = viewModel::onApiKeyChanged,
+                            onModelChanged = viewModel::onModelChanged,
+                            onSave = viewModel::saveProvider,
+                            onCancel = viewModel::cancelEdit,
+                        )
+                    } else {
+                        Text(
+                            "服务商: ${state.provider.ifEmpty { "未配置" }}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "模型: ${state.model.ifEmpty { "默认" }}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "API Key: ${if (state.apiKey.isEmpty()) "未设置" else "•".repeat((state.apiKey.length).coerceAtMost(8))}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (state.provider.isEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "未配置 AI 服务，可在对话前先到这里填好 API Key。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -147,5 +191,93 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+// ── AI 服务配置编辑（在设置页修改 API Key / provider / model）──
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProviderEditor(
+    state: SettingsState,
+    onProviderChanged: (String) -> Unit,
+    onApiKeyChanged: (String) -> Unit,
+    onModelChanged: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
+    val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PROVIDERS.forEach { provider ->
+            FilterChip(
+                selected = state.provider == provider,
+                onClick = { onProviderChanged(provider) },
+                label = { Text(provider, style = MaterialTheme.typography.bodyMedium) },
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    // API Key
+    AndroidView(
+        factory = { ctx ->
+            EditText(ctx).apply {
+                hint = "API Key"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                maxLines = 1
+                setSingleLine(true)
+                setTextColor(textColor)
+                setHintTextColor(hintColor)
+                textSize = 15f
+                setPadding(24, 20, 24, 20)
+                background = ctx.getDrawable(android.R.drawable.edit_text)
+                transformationMethod = PasswordTransformationMethod.getInstance()
+                doAfterTextChanged { editable -> onApiKeyChanged(editable?.toString() ?: "") }
+            }
+        },
+        update = { editText ->
+            val current = editText.text?.toString() ?: ""
+            if (current != state.apiKey) { editText.setText(state.apiKey); editText.setSelection(state.apiKey.length) }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Spacer(Modifier.height(8.dp))
+
+    // Model
+    AndroidView(
+        factory = { ctx ->
+            EditText(ctx).apply {
+                hint = "模型（选填，留空用默认）"
+                inputType = InputType.TYPE_CLASS_TEXT
+                maxLines = 1
+                setSingleLine(true)
+                setTextColor(textColor)
+                setHintTextColor(hintColor)
+                textSize = 15f
+                setPadding(24, 20, 24, 20)
+                background = ctx.getDrawable(android.R.drawable.edit_text)
+                doAfterTextChanged { editable -> onModelChanged(editable?.toString() ?: "") }
+            }
+        },
+        update = { editText ->
+            val current = editText.text?.toString() ?: ""
+            if (current != state.model) { editText.setText(state.model); editText.setSelection(state.model.length) }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Spacer(Modifier.height(16.dp))
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = onSave) { Text("保存") }
+        OutlinedButton(onClick = onCancel) { Text("取消") }
     }
 }

@@ -8,6 +8,7 @@ import com.lilclaw.app.data.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class SettingsState(
@@ -16,6 +17,7 @@ data class SettingsState(
     val apiKey: String = "",
     val gatewayState: GatewayState = GatewayState.Idle,
     val gatewayPort: Int = 3000,
+    val editing: Boolean = false,   // 是否在编辑 AI 服务配置
 )
 
 class SettingsViewModel(
@@ -44,6 +46,33 @@ class SettingsViewModel(
                 )
             }.collect { _state.value = it }
         }
+    }
+
+    fun setEditing(editing: Boolean) {
+        _state.update { it.copy(editing = editing) }
+    }
+
+    fun onProviderChanged(provider: String) {
+        _state.update { it.copy(provider = provider) }
+    }
+    fun onApiKeyChanged(apiKey: String) {
+        _state.update { it.copy(apiKey = apiKey) }
+    }
+    fun onModelChanged(model: String) {
+        _state.update { it.copy(model = model) }
+    }
+
+    /** 保存 AI 服务配置并退出编辑。 */
+    fun saveProvider() {
+        val s = _state.value
+        viewModelScope.launch {
+            settings.updateProvider(s.provider, s.apiKey, s.model)
+            _state.update { it.copy(editing = false) }
+        }
+    }
+
+    fun cancelEdit() {
+        setEditing(false)
     }
 
     fun startGateway() {
