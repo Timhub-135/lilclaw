@@ -23,16 +23,16 @@ class ProcessRunner(private val context: Context) : EngineProxy {
     private val prootLoaderBin: File get() = File(nativeLibDir, "libproot_loader.so")
     private val libDir: File get() = File(context.filesDir, "lib")
 
-    var gatewayProcess: Process? = null
+    override var gatewayProcess: Process? = null
         private set
-    var serveUiProcess: Process? = null
+    override var serveUiProcess: Process? = null
         private set
 
     /**
      * Start the OpenClaw gateway process inside proot.
      * Returns the Process handle. Caller should pump stdout.
      */
-    suspend fun startGateway(port: Int): Process = withContext(Dispatchers.IO) {
+    override suspend fun startGateway(port: Int): Process = withContext(Dispatchers.IO) {
         prootBin.setExecutable(true)
 
         val cmd = buildProotCommand(
@@ -52,7 +52,7 @@ class ProcessRunner(private val context: Context) : EngineProxy {
      * Start the serve-ui.cjs static file server inside proot.
      * Returns null if serve-ui.cjs doesn't exist.
      */
-    fun startServeUi(): Process? {
+    override fun startServeUi(): Process? {
         if (serveUiProcess?.isAlive == true) return serveUiProcess
 
         val serveUiFile = File(rootfsDir, "root/lilclaw-ui/serve-ui.cjs")
@@ -74,7 +74,7 @@ class ProcessRunner(private val context: Context) : EngineProxy {
     /**
      * Stop all managed processes.
      */
-    fun stopAll() {
+    override fun stopAll() {
         serveUiProcess?.destroy()
         serveUiProcess = null
         gatewayProcess?.destroy()
@@ -84,7 +84,7 @@ class ProcessRunner(private val context: Context) : EngineProxy {
     /**
      * Force-kill all managed processes (after timeout).
      */
-    fun forceStopAll() {
+    override fun forceStopAll() {
         serveUiProcess?.let { if (it.isAlive) it.destroyForcibly() }
         serveUiProcess = null
         gatewayProcess?.let { if (it.isAlive) it.destroyForcibly() }

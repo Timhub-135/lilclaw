@@ -38,9 +38,9 @@ class SandboxProxy(private val context: Context) : EngineProxy {
     private val wsDir: File get() = File(rootfsDir, "root/workspace")
     private val tmpDir: File get() = File(rootfsDir, "tmp")
 
-    var gatewayProcess: Process? = null
+    override var gatewayProcess: Process? = null
         private set
-    var serveUiProcess: Process? = null
+    override var serveUiProcess: Process? = null
         private set
 
     init {
@@ -52,7 +52,7 @@ class SandboxProxy(private val context: Context) : EngineProxy {
     /**
      * Start the OpenClaw gateway process via sandbox (no ptrace).
      */
-    suspend fun startGateway(port: Int): Process = withContext(Dispatchers.IO) {
+    override suspend fun startGateway(port: Int): Process = withContext(Dispatchers.IO) {
         val argv = listOf(
             "node", "/usr/local/bin/openclaw", "gateway", "run",
             "--allow-unconfigured", "--port", port.toString(), "--token", "lilclaw-local"
@@ -65,7 +65,7 @@ class SandboxProxy(private val context: Context) : EngineProxy {
     /**
      * Start the serve-ui.cjs static file server via sandbox.
      */
-    fun startServeUi(): Process? {
+    override fun startServeUi(): Process? {
         if (serveUiProcess?.isAlive == true) return serveUiProcess
         if (!File(rootfsDir, "root/lilclaw-ui/serve-ui.cjs").exists()) {
             Log.w(TAG, "serve-ui.cjs not found, skip")
@@ -76,12 +76,12 @@ class SandboxProxy(private val context: Context) : EngineProxy {
         return process
     }
 
-    fun stopAll() {
+    override fun stopAll() {
         serveUiProcess?.destroy(); serveUiProcess = null
         gatewayProcess?.destroy(); gatewayProcess = null
     }
 
-    fun forceStopAll() {
+    override fun forceStopAll() {
         serveUiProcess?.let { if (it.isAlive) it.destroyForcibly() }; serveUiProcess = null
         gatewayProcess?.let { if (it.isAlive) it.destroyForcibly() }; gatewayProcess = null
     }
@@ -118,6 +118,12 @@ class SandboxProxy(private val context: Context) : EngineProxy {
         } else {
             File(wsDir, p).absolutePath
         }
+    }
+
+    /** 是否指向宿主敏感根（越界路径）。 */
+    private fun isHostPath(p: String): Boolean {
+        val deny = listOf("/proc/", "/sys/", "/dev/", "/data/", "/sdcard/", "/storage/", "/system/")
+        return deny.any { p.startsWith(it) }
     }
 
     // ── 装包锚定：只写 rootfs ──
