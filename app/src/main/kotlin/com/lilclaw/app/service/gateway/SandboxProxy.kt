@@ -89,10 +89,13 @@ class SandboxProxy(private val context: Context) : EngineProxy {
 
     /**
      * Start the OpenClaw gateway process via sandbox (no ptrace).
+     * 注意：sandbox 无 chroot 路径翻译，node 与 openclaw 都须用 rootfs 内真实绝对路径。
      */
     override suspend fun startGateway(port: Int): Process = withContext(Dispatchers.IO) {
+        val nodeBin = File(rootfsDir, "usr/bin/node").absolutePath
+        val openclaw = File(rootfsDir, "usr/local/bin/openclaw").absolutePath
         val argv = listOf(
-            "node", "/usr/local/bin/openclaw", "gateway", "run",
+            nodeBin, openclaw, "gateway", "run",
             "--allow-unconfigured", "--port", port.toString(), "--token", "lilclaw-local"
         )
         val process = spawnSandboxed(argv)
@@ -105,11 +108,14 @@ class SandboxProxy(private val context: Context) : EngineProxy {
      */
     override fun startServeUi(): Process? {
         if (serveUiProcess?.isAlive == true) return serveUiProcess
-        if (!File(rootfsDir, "root/lilclaw-ui/serve-ui.cjs").exists()) {
+        val serveUiFile = File(rootfsDir, "root/lilclaw-ui/serve-ui.cjs")
+        if (!serveUiFile.exists()) {
             Log.w(TAG, "serve-ui.cjs not found, skip")
             return null
         }
-        val process = spawnSandboxed(listOf("node", "/root/lilclaw-ui/serve-ui.cjs"))
+        // sandbox 无 chroot，都须用 rootfs 真实绝对路径
+        val nodeBin = File(rootfsDir, "usr/bin/node").absolutePath
+        val process = spawnSandboxed(listOf(nodeBin, serveUiFile.absolutePath))
         serveUiProcess = process
         return process
     }
