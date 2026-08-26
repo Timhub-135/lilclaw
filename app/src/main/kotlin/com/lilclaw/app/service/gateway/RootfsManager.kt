@@ -65,6 +65,9 @@ class RootfsManager(private val context: Context) {
     private val libDir: File get() = File(context.filesDir, "lib")
     private val layersJson: File get() = File(rootfsDir, ".layers.json")
 
+    /** 公开访问 .layers.json（供 GatewayManager 判断更新检查时机）。 */
+    fun layersJsonFile(): File = layersJson
+
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress
 
@@ -77,6 +80,13 @@ class RootfsManager(private val context: Context) {
                 && File(rootfsDir, "usr/local/bin/openclaw").exists()
 
     // ── Full extraction (first-time setup) ────────────────
+
+    /**
+     * 是否所有 FALLBACK_LAYERS 都已内置在 APK assets。
+     * 若都内置，首启可完全离线解包（无需联网拉 manifest）。
+     */
+    private fun allBundledAssetsPresent(): Boolean =
+        FALLBACK_LAYERS.all { layer -> hasAssetFile("rootfs/${layer.assetFile}") }
 
     /**
      * Find a bundled asset file for a layer.
@@ -98,7 +108,14 @@ class RootfsManager(private val context: Context) {
         onStateChange: (String) -> Unit,  // "preparing" | "downloading" | "extracting"
         log: (String) -> Unit,
     ) {
-        val layers = fetchManifestLayers(log) ?: FALLBACK_LAYERS
+        // 离线优先：若内置 asset 已齐全，直接解包内置层，完全不联网（安装后启动零下载）。
+        // 仅当某个内置层缺失时才联网拉 manifest（可能有机场新版本）。
+        val layers = if (allBundledAssetsPresent()) {
+            log("使用 APK 内置层（离线解包，零下载）")
+            FALLBACK_LAYERS
+        } else {
+            fetchManifestLayers(log) ?: FALLBACK_LAYERS
+        }
         lastInstalledLayers = layers
         val totalBytes = layers.sumOf { it.sizeBytes }
         var completedBytes = 0L

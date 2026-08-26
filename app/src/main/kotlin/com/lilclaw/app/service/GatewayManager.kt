@@ -8,6 +8,7 @@ import com.lilclaw.app.service.gateway.EngineProxy
 import com.lilclaw.app.service.gateway.ProcessRunner
 import com.lilclaw.app.service.gateway.RootfsManager
 import com.lilclaw.app.service.gateway.SandboxProxy
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +46,9 @@ class GatewayManager(private val context: Context) {
 
     companion object {
         private const val TAG = "GatewayManager"
+
+        /** 距上次层更新检查超过此时间才联网检查（默认 1 天）。避免启动即联网。 */
+        private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -72,6 +76,26 @@ class GatewayManager(private val context: Context) {
     private fun log(msg: String) {
         Log.i(TAG, msg)
         _logLines.tryEmit(msg)
+    }
+
+    // ── 离线优先的层更新检查 ─────────────────────────────
+
+    /**
+     * 是否值得联网检查层更新。为避免"安装后启动即联网下载"拖慢甚至阻塞启动：
+     *  - 首次安装（无 .layers.json）或 rootfs 不完整：需要联网获取清单。
+     *  - 已就绪的安装：默认跳过联网更新，除非距上次检查超过 [UPDATE_CHECK_INTERVAL_MS]。
+     * 返回 true 表示调用方应联网检查更新。
+     */
+    private fun shouldCheckForUpdates(): Boolean {
+        return try {
+            if (!rootfs.isReady) return true
+            val layersJson = rootfs.layersJsonFile()
+            if (!layersJson.exists()) return true
+            val last = layersJson.lastModified()
+            (System.currentTimeMillis() - last) > UPDATE_CHECK_INTERVAL_MS
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
@@ -151,11 +175,16 @@ class GatewayManager(private val context: Context) {
                     return@launch
                 }
 
-                // Check for layer updates
-                val stale = rootfs.getStaleLayers(::log)
-                if (stale.isNotEmpty()) {
-                    log("正在更新 ${stale.joinToString { it.name }}...")
-                    rootfs.updateLayers(stale, ::log)
+                // Check for layer updates —— 离线优先：仅当 rootfs 不完整或距上次检查超过阈值才联网
+                // （安装后 rootfs 完整+近期已检查 → 跳过联网，启动零下载/零等待）
+                if (shouldCheckForUpdates()) {
+                    val stale = rootfs.getStaleLayers(::log)
+                    if (stale.isNotEmpty()) {
+                        log("正在更新 ${stale.joinToString { it.name }}...")
+                        rootfs.updateLayers(stale, ::log)
+                    } else {
+                        rootfs.layersJsonFile().setLastModified(System.currentTimeMillis())
+                    }
                 }
 
                 if (provider.isNotEmpty()) {
